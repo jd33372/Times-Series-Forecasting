@@ -1,0 +1,510 @@
+---
+title: "Gold_Project"
+author: "James DiLuca"
+date: "2025-02-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# Load in Gold Data
+```{r}
+library(readxl)
+library(dplyr)
+library(forecast)
+library(ggplot2)
+library(plotly)
+
+file_path <- "C:/Users/james/Downloads/Gold_Prices.xlsx"
+
+sheet_names <- c('Yearly_Avg', 'Quarterly_Avg', 'Monthly_Avg')
+
+# Read each sheet into a separate data frame
+Yearly_Avg <- read_excel(file_path, sheet = sheet_names[1]) %>%
+  rename(Date = 1)
+
+Quarterly_Avg <- read_excel(file_path, sheet = sheet_names[2]) %>%
+  rename(Date = 1)
+
+Monthly_Avg <- read_excel(file_path, sheet = sheet_names[3]) %>%
+  rename(Date = 1)
+
+```
+
+# Clean Data
+```{r}
+# Convert to Just US Currency
+Yearly_Avg_USD <- Yearly_Avg[, 1:2]
+Quarterly_Avg_USD <- Quarterly_Avg[, 1:2] 
+Monthly_Avg_USD <- Monthly_Avg[, 1:2]
+
+```
+
+# Create Timeseries for Monthly data
+```{r}
+
+Gold.ts <- ts(Monthly_Avg_USD$USD, start = c(1978, 1), end = c(2025, 1), freq = 12)
+
+# Plot
+plot(Gold.ts, main = "Monthly Average USD Time Series",
+     xlab = "Year", ylab = "USD",
+     col = "blue", lwd = 2)
+
+```
+
+
+# Set Test & Validation Data
+
+```{r}
+
+nValid <- 113
+
+
+nTrain <- length(Gold.ts) - nValid
+
+train.ts<- window(Gold.ts, end = c(2015,8))
+
+valid.ts <- window(Gold.ts, start=c(2015, 9), end = c(2025, 1))
+```
+
+## ACF Plot
+
+```{r}
+diff.gold.ts <- diff(Gold.ts)
+Acf(diff.gold.ts)
+
+```
+
+## Difference Plot
+
+```{r}
+plot.ts(diff(Monthly_Avg_USD$USD))
+
+```
+
+
+
+## Models 
+
+
+### Linear Trend
+
+```{r}
+
+linear_mod <- tslm(train.ts ~ trend)
+summary(linear_mod)
+
+#print(linear_mod$fitted.values)
+
+linear_mod_pred <- forecast(linear_mod, h= nValid, level = 90)
+#print(linear_mod_pred$mean)
+
+# ggplot2 + forecast package 
+autoplot(linear_mod_pred) +
+  autolayer(linear_mod_pred$mean, series ="Linear Forecast") +
+  autolayer(linear_mod$fitted.values, series = "Linear Fit") + 
+  autolayer(valid.ts, series = "Observed") + 
+  xlab("Year") + ylab("Gold Price Per Ounce") + 
+  guides(color = guide_legend(title = ""))
+
+
+```
+
+
+```{r}
+linear.res <- linear_mod$residuals
+acf(linear.res, lag.max = 12)
+```
+
+
+## Exponential Trend
+
+```{r}
+
+exp_mod <- tslm(train.ts ~ trend , lambda = 0) #lambda = 0 indicates exponential trend
+summary(exp_mod)
+exp_mod_pred <- forecast(exp_mod, h= nValid, level=0)
+
+autoplot(exp_mod_pred) +
+  autolayer(exp_mod_pred$mean, series="Exponential Forecast") + 
+  autolayer(exp_mod$fitted.values, series = 'Exponential Fit') +
+  autolayer(valid.ts, series = "Observed") + 
+  xlab("Year") + ylab("Gold Price Per Ounce") + 
+  guides(color = guide_legend(title = ""))
+
+
+```
+
+```{r}
+exp.res <- exp_mod$residuals
+acf(exp.res, lag.max = 12)
+```
+
+## Quadratic Trend Model
+
+```{r}
+quad_mod <- tslm(train.ts ~ trend + I(trend^2))
+summary(quad_mod)
+quad_mod_pred <- forecast(quad_mod, h= nValid, level=90)
+
+Quad_mod_plot <- autoplot(quad_mod_pred) +
+  autolayer(quad_mod_pred$mean, series ="Quadratic Forecast") +
+  autolayer(quad_mod$fitted.values, series = "Quadratic Fit") +
+  autolayer(valid.ts, series = "Observed") + 
+  xlab("Year") + ylab("Gold Price Per Ounce") + 
+  guides(color = guide_legend(title = ""))
+
+plotly::ggplotly(Quad_mod_plot)
+
+```
+
+
+## Residuals
+
+```{r}
+quad.res <- quad_mod$residuals
+acf(quad.res, lag.max = 12)
+```
+
+## AR1 on Residuals to Improve Quadratic Trend 
+
+```{r}
+train.res.ar.1 <- Arima(quad.res, order = c(1, 0, 0))
+
+
+summary(train.res.ar.1)
+
+quad.res.for <- forecast(quad.res, h =nValid, level = 90)
+
+autoplot(quad.res)+
+  autolayer(quad.res.for$fitted)
+```
+
+
+
+```{r}
+
+autoplot(quad_mod_pred)+
+  autolayer(quad.res.for$mean + quad_mod_pred$mean, series = "Improved Quad. Trend")+
+  autolayer(valid.ts, series = "Observed") + 
+  xlab("Year") + ylab("Gold Price Per Ounce") + 
+  guides(color = guide_legend(title = ""))
+
+
+```
+
+
+
+
+```{r}
+acf(train.res.ar.1$residuals, lag.max = 12)
+
+```
+
+
+## Additive Seasonality
+
+```{r}
+season_mod <- tslm(train.ts ~ season)
+summary(season_mod)
+season_mod_pred <- forecast(season_mod, h= nValid, level=0)
+
+
+autoplot(season_mod_pred) +
+  autolayer(season_mod_pred$mean, series ="Seasonality Forecast") +
+  autolayer(valid.ts, series = "Observed") + 
+  autolayer(season_mod$fitted.values, series = "Seasonality Fit") +
+  guides(color = guide_legend(title = ""))
+```
+
+
+
+```{r}
+season.res <- season_mod$residuals
+acf(season.res, lag.max = 12)
+```
+
+
+```{r}
+gold_reg_plot <- autoplot(season_mod_pred) +
+  autolayer(season_mod_pred$mean, series ="Seasonality Forecast") +
+  autolayer(quad_mod_pred$mean, series ="Quadratic Forecast") +
+  autolayer(exp_mod_pred$mean, series="Exponential Forecast") +
+  autolayer(linear_mod_pred$mean, series = "Linear Forecast") + 
+  autolayer(quad_mod_pred$fitted, series = "Quadratic Fit")+
+  autolayer(valid.ts, series = "Observed") + 
+  labs(title = "Regression Based Model Forecasts", x = "Year", y = "Gold Price Per Ounce") + 
+  guides(color = guide_legend(title = ""))
+
+plotly::ggplotly(gold_reg_plot)
+
+```
+
+
+## Residual Plot
+
+
+```{r}
+autoplot(season_mod_pred$residuals) + 
+  autolayer(season_mod_pred$residuals, series = "Training residuals") + 
+  autolayer(valid.ts - season_mod_pred$mean, series = "Validation residuals")
+```
+
+##Holt Winters ZZZ Model
+
+```{r}
+
+gold.ets <- ets(train.ts, model = "ZZZ")
+
+gold.ets.forecast <- forecast(gold.ets, h = nValid, level = 0)
+
+autoplot(gold.ets.forecast) + 
+  autolayer(gold.ets.forecast$mean, series = "ETS Forecast")+
+  autolayer(valid.ts, series = "Observed")+
+  guides(color = guide_legend(title = ""))
+```
+
+
+```{r}
+ets.res <- gold.ets$residuals
+acf(ets.res, lag.max = 12)
+```
+
+
+### Auto Arima
+
+```{r}
+
+gold.arima <- auto.arima(train.ts)
+summary(gold.arima)
+gold.arima.forecast <- forecast(gold.arima, h = nValid, level = 0)
+
+gold_arima_plot <- autoplot(gold.arima.forecast)+
+  autolayer(valid.ts, series = "Observed")+
+  autolayer(gold.arima.forecast$mean, series ="ARIMA Forecast") +
+  xlab("Time") + ylab("Gold Price per Ounce") +
+  guides(color = guide_legend(title = ""))
+
+plotly::ggplotly(gold_arima_plot)
+
+
+
+```
+
+
+```{r}
+train.res.from.arima <- gold.arima$residuals
+
+arima_res <- diff(train.res.from.arima)
+
+acf(arima_res, lag.max = 12)
+
+
+```
+
+## NN model 
+
+```{r}
+
+p <- 10 # Number of previous time steps used for forecast
+  
+P <- 8 # Number of previous seasonal values to use
+  
+size <- 7 # Number of hidden nodes
+
+
+
+gold.nnetar <- nnetar(train.ts, repeats =20, p = p, P = P, size = size)
+
+gold.nnetar.forecast <- forecast(gold.nnetar, h = nValid)
+
+autoplot(gold.nnetar.forecast) +
+  autolayer(valid.ts, series = "Observed")+
+  autolayer(gold.nnetar.forecast$mean, series ="NN Forecast") +
+  autolayer(gold.nnetar.forecast$fitted, series = "NN Fit")+
+  guides(color = guide_legend(title = ""))
+
+```
+
+
+
+## Naive
+
+
+```{r}
+gold.naive <- naive(train.ts, h = nValid, level = 0)
+
+gold_naive_mod_pred <- forecast(gold.naive, h = nValid)
+
+gold_naive <- autoplot(gold_naive_mod_pred) +
+  autolayer(valid.ts, series = "Observed")+
+  autolayer(gold_naive_mod_pred$mean, series ="Naive Forecast") +
+  xlab("Time") + ylab("Gold Price per Ounce") +
+  guides(color = guide_legend(title = ""))
+
+plotly::ggplotly(gold_naive)
+```
+
+
+## Holt Winters 
+
+```{r}
+
+gold.holt.mod <- ets(train.ts, model = "AAN")
+summary(gold.holt.mod)
+
+gold.holt.pred <- forecast(gold.holt.mod, h = nValid, level = 0)
+
+autoplot(gold.holt.pred)+
+  autolayer(valid.ts, series = "Observed")+
+  autolayer(gold.holt.pred$mean, series = "Holt Winter Forecast") +
+  guides(color = guide_legend(title = ""))
+
+```
+
+
+
+
+```{r}
+holt.res <- gold.holt.mod$residuals
+acf(holt.res, lag.max = 12)
+```
+
+
+
+
+
+
+```{r}
+dual_holt_plot <- autoplot(gold.holt.pred)+
+  autolayer(valid.ts, series = "Observed")+
+  autolayer(gold.holt.pred$mean, series = "Holt Winter (AAN) Forecast") +
+  autolayer(gold.ets.forecast$mean, series = "Holt Winter (ZZZ) Forecast" )+
+  labs(title = "Forecasts of Holt Winters Models", x = "Year", y = "Price of Gold per Ounce")+
+  guides(color = guide_legend(title = ""))
+
+plotly:: ggplotly(dual_holt_plot)
+
+```
+
+## Moving Average
+
+```{r}
+library(zoo)
+
+ma.trailing <- rollmean(train.ts, k = 12, align = "right")
+last.ma <- tail(ma.trailing, 1)
+
+ma.trailing.pred <- ts(rep(last.ma, nValid), start = c(1978, nTrain + 1), end = c(1978, nTrain + nValid), freq = 12)
+
+ma_plot <- autoplot(Gold.ts)+
+  autolayer(ma.trailing, series = "Moving Average") +
+  autolayer(ma.trailing.pred, series = "MA Forecast")+
+  xlab("Time") + ylab("Gold Price per Ounce") +
+  ggtitle("Moving Average Forecast")
+
+plotly::ggplotly(ma_plot)
+
+```
+
+
+## Polynomial Performance 
+
+```{r}
+# Model 1: Linear Trend Model (linear_mod)
+linear_mod_acc <- accuracy(linear_mod_pred$fitted, train.ts)
+print(linear_mod_acc)
+# Model 2: Exponential Trend Model (exp_model)
+exp_mod_acc <- accuracy(exp_mod_pred$fitted, train.ts)
+print(exp_mod_acc)
+# Model 3: Quadratic Trend Model (quad_mod)
+quad_mod_acc <- accuracy(quad_mod_pred$fitted, train.ts)
+print(quad_mod_acc)
+# Model 4: Additive Seasonality (season_mod)
+season_mod_acc <- accuracy(season_mod_pred$fitted, train.ts)
+print(season_mod_acc)
+```
+
+## Improved Quadratic Trend With ARIMA
+
+```{r}
+
+quad_mod_improved <- accuracy(quad.res.for$mean + quad_mod_pred$mean, valid.ts)
+print(quad_mod_improved)
+
+```
+
+
+
+##Naive Model Performance
+
+```{r}
+
+naive_mod_acc <- accuracy(gold_naive_mod_pred$mean, valid.ts)
+print(naive_mod_acc)
+```
+
+## ARIMA Model Performance:
+
+```{r}
+arima_mod_acc <- accuracy(gold.arima.forecast$mean, valid.ts)
+print(arima_mod_acc)
+```
+
+## Holt Winter Model Performance:
+
+```{r}
+
+gold_holt_acc <- accuracy(gold.holt.pred$mean, valid.ts)
+print(gold_holt_acc)
+
+```
+
+## Neural Net Model Performance 
+
+```{r}
+
+nn_acc <- accuracy(gold.nnetar.forecast$mean, valid.ts)
+print(nn_acc)
+```
+
+## ETS ZZZ Model Performance
+
+```{r}
+
+ets_acc <- accuracy(gold.ets.forecast$mean, valid.ts)
+print(ets_acc)
+```
+
+## Moving Average
+
+```{r}
+ma_acc <- accuracy(ma.trailing.pred, valid.ts)
+print(ma_acc)
+```
+
+## Forecasting Using Improved Quadratic Model on Entire Dataset: 
+
+```{r}
+
+gold.quad <- tslm(Gold.ts ~ trend + I(trend^2))
+
+gold_quad_pred <- forecast(gold.quad, h= nValid, level=95)
+
+final.res <- gold.quad$residuals
+  
+quad.res.final <- forecast(final.res, h =nValid, level = 95)
+
+gold_quad_plot <- autoplot(gold_quad_pred) +
+  autolayer(quad.res.final$mean + gold_quad_pred$mean, series ="Quadratic Forecast") +
+  labs(title = "Quadratic Forecast Improved Full", x = "Year", y = "Gold Price Per Ounce") + 
+  guides(color = guide_legend(title = ""))
+
+plotly::ggplotly(gold_quad_plot)
+
+```
+
